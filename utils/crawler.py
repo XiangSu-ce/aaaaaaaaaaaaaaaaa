@@ -2,6 +2,7 @@ import json
 import random
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional
 
 import requests
@@ -516,45 +517,71 @@ class ProxyCrawler:
             collected += [p for p in self._crawl_scdn_table(source) if p not in socks_all]
         return self._finish_source(source, collected)
 
+    def _fetch_scdn_page(self, base: str, proto: str, page: int, per_page: int):
+        """抓取 SCDN 单页，返回 (rows_html, totalPages)；失败返回 (None, None)"""
+        html = self.fetch(f"{base}?protocol={proto}&page={page}&per_page={per_page}",
+                          timeout=20, retries=2)
+        if not html:
+            return None, None
+        try:
+            data = json.loads(html)
+        except json.JSONDecodeError:
+            return None, None
+        return data.get("table_html") or "", data.get("totalPages")
+
+    @staticmethod
+    def _parse_scdn_rows(rows_html: str, max_ms: int) -> list:
+        """解析单页表格行，过滤超过 max_latency_ms 的条目，返回 ip:port 列表"""
+        pairs = []
+        for row in rows_html.split("<tr>"):
+            m = re.search(r'cell-ip">([\d.]+)</td><td>(\d+)</td>', row)
+            if not m:
+                continue
+            ms_m = re.search(r'(\d+)ms', row)
+            if ms_m and int(ms_m.group(1)) > max_ms:
+                continue
+            pairs.append(f"{m.group(1)}:{m.group(2)}")
+        return pairs
+
     def _crawl_scdn_proto(self, source: dict, proto: str) -> set:
-        """按协议分页抓取 SCDN（列表按响应时间升序，超过 max_latency_ms 自适应截断）"""
+        """按协议分页抓取 SCDN：第1页取总页数后并行抓取其余页（按延迟过滤 max_latency_ms）"""
         base = source.get("fallback_url", "https://proxy.scdn.io/get_proxies.php")
         per_page = 100
         max_pages = source.get("max_pages", 200)
         max_ms = source.get("max_latency_ms", 4000)
-        pairs, page = set(), 1
+        rows_html, total_pages = self._fetch_scdn_page(base, proto, 1, per_page)
+        if not rows_html:
+            print(f"⚠️ SCDN {proto} 第1页获取失败")
+            return set()
+        pairs = set(self._parse_scdn_rows(rows_html, max_ms))
+
+        if total_pages:
+            last_page = min(int(total_pages), max_pages)
+            pages = list(range(2, last_page + 1))
+            workers = int(source.get("page_workers", 8))
+            if pages:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = [executor.submit(self._fetch_scdn_page, base, proto, p, per_page)
+                               for p in pages]
+                    for fut in as_completed(futures):
+                        rh, _ = fut.result()
+                        if rh:
+                            pairs.update(self._parse_scdn_rows(rh, max_ms))
+            print(f"ℹ️ SCDN {proto} 并行抓取完成：共 {1 + len(pages)} 页 / 有效 {len(pairs)} 个")
+            return pairs
+
+        page = 2
         while page <= max_pages:
-            html = self.fetch(f"{base}?protocol={proto}&page={page}&per_page={per_page}",
-                              timeout=20, retries=2)
-            if not html:
+            rh, _ = self._fetch_scdn_page(base, proto, page, per_page)
+            if not rh:
                 break
-            try:
-                data = json.loads(html)
-            except json.JSONDecodeError:
-                break
-            rows_html = data.get("table_html") or ""
-            if not rows_html:
-                break
-            total_pages = data.get("totalPages")
-            past_limit = False
-            page_pairs = 0
-            for row in rows_html.split("<tr>"):
-                m = re.search(r'cell-ip">([\d.]+)</td><td>(\d+)</td>', row)
-                if not m:
-                    continue
-                ms_m = re.search(r'(\d+)ms', row)
-                if ms_m and int(ms_m.group(1)) > max_ms:
-                    past_limit = True
-                    break
-                pairs.add(f"{m.group(1)}:{m.group(2)}")
-                page_pairs += 1
-            if past_limit or page_pairs < per_page:
-                break
-            if total_pages and page >= int(total_pages):
+            row_pairs = self._parse_scdn_rows(rh, max_ms)
+            pairs.update(row_pairs)
+            if len(row_pairs) < per_page:
                 break
             page += 1
             time.sleep(source.get("delay", 0.2))
-        print(f"ℹ️ SCDN {proto} 分页完成：抓取 {page} 页 / 有效 {len(pairs)} 个")
+        print(f"ℹ️ SCDN {proto} 顺序抓取完成：共 {page} 页 / 有效 {len(pairs)} 个")
         return pairs
 
 
