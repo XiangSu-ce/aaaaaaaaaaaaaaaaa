@@ -271,18 +271,24 @@ class ProxyValidator:
         return entry
 
     def _sweep(self, proxies, thread_count: int, fast_timeout: float):
-        """第一段：HTTP 快速筛选（短超时，快速淘汰死代理）"""
+        """第一段：HTTP 快速筛选（短超时，快速淘汰死代理）。
+        分块提交（每块 2 万），避免单次提交几十万任务时线程池异常卡死。"""
         print(f"⚡ 快筛(HTTP)：{len(proxies)} 个 | 线程={thread_count} | 单代理超时={fast_timeout}s")
         results = []
+        done = 0
         start = time.time()
-        with ThreadPoolExecutor(max_workers=thread_count) as executor:
-            futures = [executor.submit(self._check_http, p, fast_timeout) for p in proxies]
-            for idx, future in enumerate(as_completed(futures), 1):
-                detail = future.result()
-                if detail:
-                    results.append(detail)
-                if idx % 2000 == 0:
-                    print(f"   快筛进度 {idx}/{len(proxies)} | 已通过 {len(results)}")
+        chunk_size = 20000
+        for begin in range(0, len(proxies), chunk_size):
+            chunk = proxies[begin:begin + chunk_size]
+            with ThreadPoolExecutor(max_workers=thread_count) as executor:
+                futures = [executor.submit(self._check_http, p, fast_timeout) for p in chunk]
+                for future in as_completed(futures):
+                    detail = future.result()
+                    if detail:
+                        results.append(detail)
+                    done += 1
+                    if done % 2000 == 0:
+                        print(f"   快筛进度 {done}/{len(proxies)} | 已通过 {len(results)}")
         print(f"⚡ 快筛完成：通过 {len(results)}/{len(proxies)} 个 | 耗时 {int(time.time() - start)}s")
         return results
 
