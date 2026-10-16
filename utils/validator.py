@@ -165,8 +165,53 @@ class ProxyValidator:
                 except Exception:
                     pass
 
+    def _http_connect_raw(self, proxy_ip: str, proxy_port: int, total_timeout: float):
+        """
+        原生 socket 的 HTTPS CONNECT 探测：向代理发起 CONNECT api.ipify.org:443，
+        返回 200 即通过快筛（真实连通性由后续 HTTPS 复核验证，防止假 200 代理混入）。
+        返回 (是否成功, 延迟ms, None)
+        """
+        start = time.time()
+        sock = None
+        try:
+            sock = socket.create_connection((proxy_ip, proxy_port), timeout=total_timeout)
+            request = (
+                f"CONNECT api.ipify.org:443 HTTP/1.1\r\n"
+                f"Host: api.ipify.org:443\r\n"
+                f"User-Agent: {self.headers['User-Agent']}\r\n\r\n"
+            )
+            sock.sendall(request.encode())
+            deadline = start + total_timeout
+            chunks = []
+            while True:
+                remain = deadline - time.time()
+                if remain <= 0:
+                    return False, 0, None
+                sock.settimeout(remain)
+                data = sock.recv(4096)
+                if not data:
+                    return False, 0, None
+                chunks.append(data)
+                text = b"".join(chunks).decode("utf-8", "replace")
+                head = text.split("\r\n", 1)[0]
+                if " 200 " in head:
+                    return True, int((time.time() - start) * 1000), None
+                if "\r\n\r\n" in text:
+                    return False, 0, None
+        except Exception:
+            return False, 0, None
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
     def _check_http(self, proxy: str, fast_timeout: float):
-        """快筛：只做 HTTP 探测。普通代理走原生socket(硬总时限)；socks 走 requests。"""
+        """快筛：HTTP GET 与 HTTPS CONNECT 双通道，任一通过即候选。
+        - 通道1(原生HTTP GET)通过 → caps=["http"]
+        - 通道2(原生CONNECT)通过 → caps=["https-pending"]，需 HTTPS 复核真实验证
+        - socks 走 requests（两条通道均为真实请求，通道2直接算 https）"""
         parsed = self.parse_proxy(proxy)
         if not parsed:
             return None
@@ -174,18 +219,37 @@ class ProxyValidator:
         if scheme.startswith("socks"):
             if not HAS_SOCKS:
                 return None
-            ok, latency, exit_ip = self._probe(f"{scheme}://{host}:{port}", self.http_url, fast_timeout)
-        else:
-            ok, latency, exit_ip = self._http_probe_raw(host, port, fast_timeout)
-        if not ok:
+            proxy_url = f"{scheme}://{host}:{port}"
+            ok, latency, exit_ip = self._probe(proxy_url, self.http_url, fast_timeout)
+            if ok:
+                return {
+                    "proxy": proxy, "ip": host, "port": port, "protocol": scheme,
+                    "caps": ["http"], "latency_ms": latency, "exit_ip": exit_ip,
+                }
+            ok, latency, exit_ip = self._probe(proxy_url, self.https_url, fast_timeout)
+            if ok:
+                return {
+                    "proxy": proxy, "ip": host, "port": port, "protocol": scheme,
+                    "caps": ["https"], "latency_ms": latency, "exit_ip": exit_ip,
+                }
             return None
-        return {
-            "proxy": proxy, "ip": host, "port": port, "protocol": scheme,
-            "caps": ["http"], "latency_ms": latency, "exit_ip": exit_ip,
-        }
+        ok, latency, exit_ip = self._http_probe_raw(host, port, fast_timeout)
+        if ok:
+            return {
+                "proxy": proxy, "ip": host, "port": port, "protocol": scheme,
+                "caps": ["http"], "latency_ms": latency, "exit_ip": exit_ip,
+            }
+        ok, latency, _ = self._http_connect_raw(host, port, fast_timeout)
+        if ok:
+            return {
+                "proxy": proxy, "ip": host, "port": port, "protocol": scheme,
+                "caps": ["https-pending"], "latency_ms": latency, "exit_ip": None,
+            }
+        return None
 
     def _check_https(self, entry: dict):
-        """复核：对快筛通过的代理补充 HTTPS 能力探测（原地更新 entry）"""
+        """复核：对快筛通过的代理补充 HTTPS 能力探测（原地更新 entry）。
+        对 "https-pending" 条目：复核失败则返回 None（假 200 代理剔除）。"""
         parsed = self.parse_proxy(entry["proxy"])
         if not parsed:
             return entry
@@ -193,11 +257,17 @@ class ProxyValidator:
         proxy_url = f"{scheme}://{host}:{port}"
         ok, latency, exit_ip = self._probe(proxy_url, self.https_url, self.timeout)
         if ok:
-            entry["caps"].append("https")
+            if "https-pending" in entry["caps"]:
+                entry["caps"].remove("https-pending")
+            if "https" not in entry["caps"]:
+                entry["caps"].append("https")
             if latency < entry["latency_ms"]:
                 entry["latency_ms"] = latency
             if exit_ip:
                 entry["exit_ip"] = exit_ip
+            return entry
+        if "https-pending" in entry["caps"]:
+            return None
         return entry
 
     def _sweep(self, proxies, thread_count: int, fast_timeout: float):
@@ -217,15 +287,19 @@ class ProxyValidator:
         return results
 
     def _enrich(self, entries, thread_count: int):
-        """第二段：对通过快筛的代理复核 HTTPS 能力"""
+        """第二段：对通过快筛的代理复核 HTTPS 能力（假 200 代理在此剔除）"""
         if not entries:
             return
         print(f"⚡ HTTPS 复核：{len(entries)} 个 | 线程={thread_count} | 单代理超时={self.timeout}s")
         start = time.time()
+        kept = []
         with ThreadPoolExecutor(max_workers=thread_count) as executor:
             futures = [executor.submit(self._check_https, e) for e in entries]
             for future in as_completed(futures):
-                future.result()
+                result = future.result()
+                if result:
+                    kept.append(result)
+        entries[:] = kept
         https_ok = sum(1 for e in entries if "https" in e["caps"])
         print(f"⚡ HTTPS 复核完成：支持 HTTPS {https_ok} 个 | 耗时 {int(time.time() - start)}s")
 
