@@ -37,7 +37,7 @@ jobs:
       - name: run
         run: |
           mkdir -p data
-          python -u main.py --once --threads 2000 --timeout 8 --fast-timeout 4 --crawl-workers 8 --output-dir data
+          python -u main.py --once --threads 3000 --timeout 10 --fast-timeout 5 --crawl-workers 10 --output-dir data
 
       - name: pack
         run: python tools/publish_pool.py --dir data --out publish
