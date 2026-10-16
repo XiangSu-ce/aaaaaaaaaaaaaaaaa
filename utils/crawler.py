@@ -430,21 +430,73 @@ class ProxyCrawler:
         return self._finish_source(source, collected)
 
     def _crawl_scdn(self, source: dict) -> int:
-        """SCDN：text.php 全量文本，失败时降级 get_proxies.php 分页"""
+        """SCDN：text.php 全量 + socks4/socks5 协议分页列表（按延迟自适应截断）"""
         source_name = source['name'].center(30, ' ')
         print(f"\n{'=' * 80}")
         print(f"📥 开始爬取 | {source_name}")
         print(f"{'=' * 80}")
-        collected = []
+        plain = []
         html = self.fetch(source["url"], timeout=source.get("timeout", 40),
                           retries=source.get("retries", 2))
         if html:
-            collected += self.parse_api1(html)
-            print(f"✅ SCDN | text.php 提取 {len(collected):5d} 个")
-        if len(collected) < 100:
+            plain = self.parse_api1(html)
+        print(f"✅ SCDN | text.php 提取 {len(plain):5d} 个")
+
+        socks5_pairs = self._crawl_scdn_proto(source, "socks5")
+        socks4_pairs = self._crawl_scdn_proto(source, "socks4")
+        socks4_only = socks4_pairs - socks5_pairs
+        socks_all = socks5_pairs | socks4_only
+        print(f"✅ SCDN | socks5 提取 {len(socks5_pairs):5d} 个 | socks4 独有 {len(socks4_only):5d} 个")
+
+        collected = [p for p in plain if p not in socks_all]
+        collected += [f"socks5://{p}" for p in socks5_pairs]
+        collected += [f"socks4://{p}" for p in socks4_only]
+        if len(plain) < 100:
             print("⚠️ SCDN text.php 不可用或数据过少，降级 get_proxies.php 分页抓取...")
-            collected += self._crawl_scdn_table(source)
+            collected += [p for p in self._crawl_scdn_table(source) if p not in socks_all]
         return self._finish_source(source, collected)
+
+    def _crawl_scdn_proto(self, source: dict, proto: str) -> set:
+        """按协议分页抓取 SCDN（列表按响应时间升序，超过 max_latency_ms 自适应截断）"""
+        base = source.get("fallback_url", "https://proxy.scdn.io/get_proxies.php")
+        per_page = 100
+        max_pages = source.get("max_pages", 200)
+        max_ms = source.get("max_latency_ms", 4000)
+        pairs, page = set(), 1
+        while page <= max_pages:
+            html = self.fetch(f"{base}?protocol={proto}&page={page}&per_page={per_page}",
+                              timeout=20, retries=2)
+            if not html:
+                break
+            try:
+                data = json.loads(html)
+            except json.JSONDecodeError:
+                break
+            rows_html = data.get("table_html") or ""
+            if not rows_html:
+                break
+            total_pages = data.get("totalPages")
+            past_limit = False
+            page_pairs = 0
+            for row in rows_html.split("<tr>"):
+                m = re.search(r'cell-ip">([\d.]+)</td><td>(\d+)</td>', row)
+                if not m:
+                    continue
+                ms_m = re.search(r'(\d+)ms', row)
+                if ms_m and int(ms_m.group(1)) > max_ms:
+                    past_limit = True
+                    break
+                pairs.add(f"{m.group(1)}:{m.group(2)}")
+                page_pairs += 1
+            if past_limit or page_pairs < per_page:
+                break
+            if total_pages and page >= int(total_pages):
+                break
+            page += 1
+            time.sleep(source.get("delay", 0.2))
+        print(f"ℹ️ SCDN {proto} 分页完成：抓取 {page} 页 / 有效 {len(pairs)} 个")
+        return pairs
+
 
     def _crawl_scdn_table(self, source: dict, max_pages: int = 200, per_page: int = 100) -> list:
         """SCDN 分页表格接口（降级方案）"""

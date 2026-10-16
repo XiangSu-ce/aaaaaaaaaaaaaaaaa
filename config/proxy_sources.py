@@ -259,8 +259,10 @@ EXTRA_SOURCES = [
         "fallback_url": "https://proxy.scdn.io/get_proxies.php",
         "custom": "scdn",
         "pages": 1,
-        "delay": 1,
+        "delay": 0.2,
         "timeout": 40,
         "retries": 2,
+        "max_latency_ms": 4000,
+        "max_pages": 200,
     },
 ]
