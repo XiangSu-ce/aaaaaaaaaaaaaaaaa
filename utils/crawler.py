@@ -1,4 +1,5 @@
 import json
+import random
 import re
 import time
 from typing import List, Dict, Optional
@@ -338,6 +339,8 @@ class ProxyCrawler:
             return self._crawl_geonode(source)
         if custom == "scdn":
             return self._crawl_scdn(source)
+        if custom == "plain":
+            return self._crawl_plain(source)
         return self.crawl(source)
 
     def _finish_source(self, source: dict, temp_proxies: list) -> int:
@@ -427,6 +430,63 @@ class ProxyCrawler:
                 break
             page += 1
             time.sleep(source.get("delay", 1))
+        return self._finish_source(source, collected)
+
+    @staticmethod
+    def _is_private_ip(ip: str) -> bool:
+        """跳过内网/保留地址（0/10/127/192.168/172.16-31/169.254）"""
+        a, b = int(ip.split('.')[0]), int(ip.split('.')[1])
+        if a in (0, 10, 127):
+            return True
+        if a == 192 and b == 168:
+            return True
+        if a == 172 and 16 <= b <= 31:
+            return True
+        if a == 169 and b == 254:
+            return True
+        return False
+
+    def _crawl_plain(self, source: dict) -> int:
+        """通用文本列表源：urls 为字符串或 {"url","scheme","max_items"} 字典列表"""
+        source_name = source['name'].center(30, ' ')
+        print(f"\n{'=' * 80}")
+        print(f"📥 开始爬取 | {source_name}")
+        print(f"{'=' * 80}")
+        collected, seen = [], set()
+        for entry in source.get("urls", []):
+            if isinstance(entry, str):
+                url, default_scheme, max_items = entry, source.get("scheme", "http"), 0
+            else:
+                url = entry.get("url", "")
+                default_scheme = str(entry.get("scheme") or source.get("scheme") or "http").lower()
+                max_items = int(entry.get("max_items") or 0)
+            if not url:
+                continue
+            html = self.fetch(url, timeout=source.get("timeout", 30),
+                              retries=source.get("retries", 2))
+            if not html:
+                print(f"⚠️ {source['name']} | 请求失败：{url}")
+                continue
+            pairs = []
+            for line in html.splitlines():
+                m = re.search(r"(?:([A-Za-z0-9]+)://)?(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})", line)
+                if not m:
+                    continue
+                ip, port = m.group(2), int(m.group(3))
+                if not (1 <= port <= 65535) or self._is_private_ip(ip):
+                    continue
+                sc = (m.group(1) or default_scheme).lower()
+                if sc not in ("http", "https", "socks4", "socks5"):
+                    sc = default_scheme
+                key = f"{sc}://{ip}:{port}" if sc in ("socks4", "socks5") else f"{ip}:{port}"
+                if key not in seen:
+                    seen.add(key)
+                    pairs.append(key)
+            if max_items and len(pairs) > max_items:
+                pairs = random.sample(pairs, max_items)
+            collected.extend(pairs)
+            print(f"✅ {source['name']} | {url.split('/')[-1]:28s} | 提取 {len(pairs):6d} 个 | 累计 {len(collected):6d}")
+            time.sleep(source.get("delay", 0.3))
         return self._finish_source(source, collected)
 
     def _crawl_scdn(self, source: dict) -> int:
