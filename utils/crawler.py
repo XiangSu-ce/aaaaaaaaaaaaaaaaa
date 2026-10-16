@@ -117,6 +117,23 @@ class ProxyCrawler:
                 for tr in trs[1:]]
 
     @staticmethod
+    def parse_proxylisttable(html: str) -> List[str]:
+        """解析 free-proxy-list.net 系（proxylisttable）：td[0]=IP，td[1]=端口"""
+        soup = BeautifulSoup(html, 'html5lib')
+        table = soup.find('table', id='proxylisttable') or soup.find('table')
+        result = []
+        if not table:
+            return result
+        for tr in table.find_all('tr'):
+            tds = tr.find_all('td')
+            if len(tds) < 2:
+                continue
+            ip, port = tds[0].text.strip(), tds[1].text.strip()
+            if re.match(r'^\d{1,3}(?:\.\d{1,3}){3}$', ip) and port.isdigit():
+                result.append(f"{ip}:{port}")
+        return result
+
+    @staticmethod
     def parse_fpslist(html: str) -> List[str]:
         """解析fpsList格式JSON，提取ip+port"""
         pattern = r'const fpsList = (\[.*?\]);'
@@ -257,7 +274,7 @@ class ProxyCrawler:
                 # 构建请求URL
                 if "api1" in source['parser']:
                     url = source['url']
-                elif source['parser'] in ["fineproxy"]:
+                elif source['parser'] in ["fineproxy", "proxylisttable"]:
                     url = source['url']
                 elif any(domain in source['url'] for domain in ["kxdaili.com", "qiyunip.com"]):
                     url = f"{source['url']}{current_page}.html"
@@ -274,7 +291,8 @@ class ProxyCrawler:
                 print(f"\n🔄 正在爬取 | 页码：{current_page:2d}/{total_pages:2d} | URL：{url}")
                 print(f"ℹ️  当前累计 | 总列表IP数：{len(self.proxies):3d} 个")
 
-                html = self.fetch(url, post_data=post_data, retries=source.get("retries", 1))
+                html = self.fetch(url, timeout=source.get("timeout", 5), post_data=post_data,
+                                  retries=source.get("retries", 1))
 
                 # 仅在第1页显示预览
                 if current_page == 1 and html:
@@ -286,6 +304,9 @@ class ProxyCrawler:
                     no_data_count += 1
                 else:
                     ips = parser(html)
+                    hint = source.get("scheme")
+                    if hint in ("socks4", "socks5"):
+                        ips = [ip if "://" in ip else f"{hint}://{ip}" for ip in ips]
                     valid_ips = [ip for ip in ips if self._is_valid_proxy(ip)]  # 校验结果
                     page_valid_count = len(valid_ips)
 
@@ -400,6 +421,7 @@ class ProxyCrawler:
         print(f"📥 开始爬取 | {source_name}")
         print(f"{'=' * 80}")
         collected, page, fetched, total = [], 1, 0, None
+        max_pages = int(source.get("max_pages") or 0)
         while True:
             url = f"{source['url']}{page}"
             html = self.fetch(url, timeout=20, retries=source.get("retries", 3))
@@ -410,8 +432,12 @@ class ProxyCrawler:
             except json.JSONDecodeError:
                 print("❌ [GeoNode] 非有效JSON")
                 break
-            items = data.get("data") or []
-            total = data.get("total") or total
+            if isinstance(data, dict):
+                items = data.get("data") or []
+                total = data.get("total") or total
+            else:
+                items = data if isinstance(data, list) else []
+            before_len = len(collected)
             fetched += len(items)
             for it in items:
                 host, port = it.get("ip"), it.get("port")
@@ -426,8 +452,12 @@ class ProxyCrawler:
                         collected.append(f"socks4://{host}:{port}")
                     else:
                         collected.append(f"{host}:{port}")
-            print(f"✅ GeoNode | 页码 {page:2d} | 提取 {len(items):3d} 个 | 累计 {len(collected):5d}")
+            print(f"✅ GeoNode | 页码 {page:2d} | 提取 {len(items):5d} 个 | 累计 {len(collected):5d}")
             if not items or (total and fetched >= total):
+                break
+            if max_pages and page >= max_pages:
+                break
+            if len(collected) == before_len and page > 1:
                 break
             page += 1
             time.sleep(source.get("delay", 1))
