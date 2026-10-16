@@ -1,0 +1,62 @@
+name: update
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -q -r requirements.txt
+
+      - name: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: data/pool_state.json
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+
+      - name: run
+        run: |
+          mkdir -p data
+          python -u main.py --once --threads 2000 --timeout 8 --fast-timeout 4 --crawl-workers 8 --output-dir data
+
+      - name: pack
+        run: python tools/publish_pool.py --dir data --out publish
+        env:
+          POOL_CRYPT_KEY: ${{ secrets.POOL_CRYPT_KEY }}
+
+      - name: push
+        run: |
+          cd publish
+          git init -q -b dist
+          git config user.name "bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          git commit -qm "update"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" dist
+
+      - name: save
+        if: always() && hashFiles('data/pool_state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: data/pool_state.json
+          key: state-${{ github.run_id }}

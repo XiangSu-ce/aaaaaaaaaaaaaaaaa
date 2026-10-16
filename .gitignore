@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.log
+data/
+publish/
+*.enc
+README.md
+images/
+deploy/
+.venv/
+venv/
