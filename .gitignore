@@ -9,3 +9,23 @@ images/
 deploy/
 .venv/
 venv/
+
+# ---- 密钥类：任何情况下都不得进入仓库（本仓库是 public）----
+pooldist_key.txt
+*.key
+*_pat.txt
+!*.example
+# 本机桥接器产物
+data/clash_pool.*
+data/local_alive.json
+
+# ---- 内核源码核对用的临时副本（体积大，不需要进仓库）----
+_mihomo_full/
+_mihomo_src/
+_mihomo_meta.tar.gz
+_extract.py
+_ver.py
+_verify.py
+_fetch_mihomo.py
+_fetch_tar.py
+_*.py

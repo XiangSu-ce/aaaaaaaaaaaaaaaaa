@@ -418,6 +418,11 @@ EXTRA_SOURCES = [
         "custom": "plain",
         "urls": [
             "https://raw.githubusercontent.com/zloi-user/hideip.me/main/http.txt",
+            # 2026-10-20 新增：https.txt（~2500）与 connect.txt（~8000，支持 CONNECT 隧道的代理）
+            {"url": "https://raw.githubusercontent.com/zloi-user/hideip.me/main/https.txt",
+             "scheme": "https"},
+            {"url": "https://raw.githubusercontent.com/zloi-user/hideip.me/main/connect.txt",
+             "scheme": "http"},
             {"url": "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks4.txt",
              "scheme": "socks4"},
             {"url": "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks5.txt",
@@ -737,6 +742,123 @@ EXTRA_SOURCES = [
         ],
         "delay": 0.3,
         "timeout": 30,
+        "retries": 3,
+    },
+    # 第四批新增源（GitHub 同类项目调研，2026-10-20）：
+    # mzyui(原zevtyardt)/proxy-list、mmpx12/proxy-list、sunny9577/proxy-scraper、
+    # Vann-Dev/proxy-list、Casper-Tech-ke/casper-free-proxies
+    {
+        # 原 zevtyardt/proxy-list，仓库已更名为 mzyui/proxy-list，仍在活跃更新
+        # all.txt 约 17 万条（裸 ip:port 混协议不标注，弃用）；分协议文件标注 scheme
+        # http.txt ~10万 / socks5.txt ~3.7万 / socks4.txt ~3.4万，随机采样控制单轮首探成本
+        "name": "mzyui(原zevtyardt)(14万)",
+        "custom": "plain",
+        "urls": [
+            {"url": "https://raw.githubusercontent.com/mzyui/proxy-list/main/http.txt",
+             "scheme": "http", "max_items": 30000},
+            {"url": "https://raw.githubusercontent.com/mzyui/proxy-list/main/socks5.txt",
+             "scheme": "socks5", "max_items": 15000},
+            {"url": "https://raw.githubusercontent.com/mzyui/proxy-list/main/socks4.txt",
+             "scheme": "socks4", "max_items": 8000},
+        ],
+        "delay": 0.3,
+        "timeout": 90,
+        "retries": 3,
+    },
+    {
+        # mmpx12/proxy-list：聚合多站点 + 自验存活，proxies.txt 带协议前缀（http/socks4/socks5 分段）
+        # 另有 http.txt/https.txt/socks4.txt/socks5.txt 分文件（量小，proxies.txt 已覆盖）
+        "name": "mmpx12(自验存活)",
+        "custom": "plain",
+        "urls": [
+            "https://raw.githubusercontent.com/mmpx12/proxy-list/master/proxies.txt",
+        ],
+        "delay": 0.3,
+        "timeout": 30,
+        "retries": 3,
+    },
+    {
+        # sunny9577/proxy-scraper：多站点聚合器，proxies.txt 约 2600 行（裸 ip:port）
+        # csv/json 变体含国家/匿名度但 ip,port 逗号分隔，通用抓取器不支持，故用 txt
+        "name": "sunny9577(聚合器)",
+        "custom": "plain",
+        "urls": [
+            "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/proxies.txt",
+        ],
+        "delay": 0.3,
+        "timeout": 30,
+        "retries": 3,
+    },
+    {
+        # Vann-Dev/proxy-list：每日抓取+检测（对 Google/Facebook/Twitter 连通性）
+        # http.txt ~1400 / https.txt ~160 / socks5.txt ~430 / socks4.txt ~70
+        "name": "Vann-Dev(每日检测)",
+        "custom": "plain",
+        "urls": [
+            {"url": "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/http.txt",
+             "scheme": "http"},
+            {"url": "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/https.txt",
+             "scheme": "https"},
+            {"url": "https://raw.githubusercontent.com/Vann-Dev/proxy-list/main/proxies/socks5.txt",
+             "scheme": "socks5"},
+        ],
+        "delay": 0.3,
+        "timeout": 30,
+        "retries": 3,
+    },
+    {
+        # Casper-Tech-ke/casper-free-proxies：每 30 分钟自测更新，proxies.json 约 250 条
+        # JSON 数组格式，通用抓取器逐行正则提取 ip:port 兼容；条目为测试存活者，质量高
+        "name": "Casper(30分钟自测)",
+        "custom": "plain",
+        "urls": [
+            "https://raw.githubusercontent.com/Casper-Tech-ke/casper-free-proxies/main/files/proxies.json",
+        ],
+        "delay": 0.3,
+        "timeout": 30,
+        "retries": 3,
+    },
+    {
+        # themiralay/Proxy-List-World：每日更新（data-with-geolocation.json 为 ip/port 分行的
+        # JSON，通用抓取器不支持；data.txt 为裸 ip:port，约 700 条）
+        "name": "themiralay(每日更新)",
+        "custom": "plain",
+        "urls": [
+            "https://raw.githubusercontent.com/themiralay/Proxy-List-World/master/data.txt",
+        ],
+        "delay": 0.3,
+        "timeout": 30,
+        "retries": 3,
+    },
+    {
+        # VPSLabCloud/VPSLab-Free-Proxy-List：每 15 分钟更新，分协议文件（头部 # 注释行自动跳过）
+        # http_all ~1500 / socks5_all ~2400 / socks4_all ~350；另有 all_elite/all_ssl 等切面
+        "name": "VPSLabCloud(15分钟)",
+        "custom": "plain",
+        "urls": [
+            {"url": "https://raw.githubusercontent.com/VPSLabCloud/VPSLab-Free-Proxy-List/main/http_all.txt",
+             "scheme": "http"},
+            {"url": "https://raw.githubusercontent.com/VPSLabCloud/VPSLab-Free-Proxy-List/main/socks5_all.txt",
+             "scheme": "socks5"},
+            {"url": "https://raw.githubusercontent.com/VPSLabCloud/VPSLab-Free-Proxy-List/main/socks4_all.txt",
+             "scheme": "socks4"},
+        ],
+        "delay": 0.3,
+        "timeout": 30,
+        "retries": 3,
+    },
+    {
+        # runoneall/free-socks5-proxy-api：socks5 专线聚合，Go API 项目自带数据文件
+        # canuse.txt ~5000（自测可用，socks5:// 前缀）；raw.txt ~15万（socks5:// 前缀，采样 2.5万/轮）
+        "name": "runoneall(socks5专线)",
+        "custom": "plain",
+        "urls": [
+            "https://raw.githubusercontent.com/runoneall/free-socks5-proxy-api/main/data/canuse.txt",
+            {"url": "https://raw.githubusercontent.com/runoneall/free-socks5-proxy-api/main/data/raw.txt",
+             "scheme": "socks5", "max_items": 25000},
+        ],
+        "delay": 0.3,
+        "timeout": 90,
         "retries": 3,
     },
 ]
